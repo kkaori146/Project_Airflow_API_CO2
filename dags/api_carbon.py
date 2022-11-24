@@ -85,10 +85,26 @@ def total_co2():
 
   dfanalise.to_parquet('dados_tratados/pesquisa/carbon_dioxide_analysis.parquet', index = False)
 
+# Função para popular o database do PostgreSQL
+
+def inserir_dados_sql():
+  dfinal = pd.read_parquet('dados_tratados/pesquisa/carbon_dioxide_analysis.parquet', engine = 'fastparquet')
+  valores = []
+  for p in range(len(dfinal)):
+    ano = dfinal.iloc[p,0]
+    ciclo_ppm = dfinal.iloc[p,1]
+    tendencia_ppm = dfinal.iloc[p,2]
+    valores.append("('%s',' %s', %s)" %(ano, ciclo_ppm, tendencia_ppm))
+  
+  values = str(valores).strip('[]')
+  values = values.replace('"', '')
+  query = "INSERT INTO TB_CO2(ano, ciclo_ppm, tendencia_ppm) VALUES %s;" %(values)
+  return query
+
 # Definindo alguns argumentos básicos
 default_args = {
     'owner':'kkaori146',
-    'start_date': datetime(2022,11,22),
+    'start_date': datetime(2022,11,23),
     'email_on_failure':False,
     'email_on_retry':False,
     'retries':1,
@@ -100,7 +116,7 @@ with DAG(
     'api_carbon',
     max_active_runs=2,
     schedule_interval="@daily",
-    #template_searchpath= '/opt/airflow/sql',
+    template_searchpath= '/opt/airflow/sql',
     catchup = True,
     default_args = default_args) as dag:
     
@@ -146,5 +162,17 @@ with DAG(
     python_callable = total_co2
   )
 
-  [verificador_api, extrator_api] >> armazenar_dados >> normalizacao_json >> tratamento_dados >> exportacao_dados >> total_co2
+  criar_tabela = PostgresOperator(
+    task_id = 'criar_tabela',
+    postgres_conn_id = 'prod-co2',
+    sql = 'criar_tabela.sql'
+  )
+
+  inserir_dados = PostgresOperator(
+    task_id = 'inserir_dados',
+    postgres_conn_id = 'prod-co2',
+    sql = inserir_dados_sql()
+  )
+
+  [verificador_api, extrator_api] >> armazenar_dados >> normalizacao_json >> tratamento_dados >> exportacao_dados >> [total_co2, criar_tabela] >> inserir_dados
 
